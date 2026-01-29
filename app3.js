@@ -19,8 +19,8 @@
 // - WS state messages from your backend may have data.you = null. We preserve MY_SIDE locally.
 // - Timers are computed from server snapshot using serverOffset.
 
-const API_BASE = "https://YOUR-NGROK.ngrok-free.dev";
-const API_KEY = "super_secret_key_change_me";
+const API_BASE = "https://abcd-1234-56-78.ngrok-free.app";
+const API_KEY = "jdKSswe134Hdbsju39r4bsk3r4b239gwj4hjbw3r4r5wer";
 
 const tg = window.Telegram?.WebApp;
 if (tg)
