@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Economy Chess</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Telegram WebApp -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+  <link rel="stylesheet" href="style3.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- TOP BAR -->
+    <div class="topbar">
+      <div class="timer">
+        <div class="label">Общий</div>
+        <div id="tGlobal" class="time">--:--</div>
+      </div>
+      <div class="timer">
+        <div class="label">Белые</div>
+        <div id="tW" class="time">--:--</div>
+      </div>
+      <div class="timer">
+        <div class="label">Чёрные</div>
+        <div id="tB" class="time">--:--</div>
+      </div>
+    </div>
+
+    <!-- INFO LINE -->
+    <div class="info">
+      <div>♔ Белые: <b id="cW">0</b></div>
+      <div>♚ Чёрные: <b id="cB">0</b></div>
+      <div class="me">Ты: <b id="me">?</b></div>
+      <div class="status" id="status">Подключение…</div>
+    </div>
+
+    <!-- BOARD -->
+    <div id="board" class="board"></div>
+
+    <!-- BOTTOM BAR -->
+    <div class="bottom">
+
+      <div class="coins">
+        <div class="label">Монеты</div>
+        <div id="myCoins" class="value">0</div>
+      </div>
+
+      <div class="shop">
+        <button class="shopbtn" data-piece="p">
+          ♙
+          <span class="cost">1</span>
+          <span class="qty" id="q_p"></span>
+        </button>
+        <button class="shopbtn" data-piece="n">
+          ♘
+          <span class="cost">3</span>
+          <span class="qty" id="q_n"></span>
+        </button>
+        <button class="shopbtn" data-piece="b">
+          ♗
+          <span class="cost">3</span>
+          <span class="qty" id="q_b"></span>
+        </button>
+        <button class="shopbtn" data-piece="r">
+          ♖
+          <span class="cost">5</span>
+          <span class="qty" id="q_r"></span>
+        </button>
+        <button class="shopbtn" data-piece="q">
+          ♕
+          <span class="cost">9</span>
+          <span class="qty" id="q_q"></span>
+        </button>
+      </div>
+
+    </div>
+
+  </div>
+
+  <script src="app3.js"></script>
+</body>
+</html>
