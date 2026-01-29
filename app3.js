@@ -20,7 +20,7 @@
 // - Timers are computed from server snapshot using serverOffset.
 
 const API_BASE = "https://kristan-labored-earsplittingly.ngrok-free.dev";
-const API_KEY = "jdKSswe134Hdbsju39r4bsk3r4b239gwj4hjbw3r4r5wer";
+const API_KEY = "jdKSnwe134Hdbsju39r4bsk3r4b239gwj4hjbw3r4r5wer";
 
 const tg = window.Telegram?.WebApp;
 if (tg)
