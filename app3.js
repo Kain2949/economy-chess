@@ -209,47 +209,28 @@ function clearAllSelection()
 
 // ===== PIECES (SVG silhouettes) =====
 // Not chess.com assets (those are copyrighted). This is a custom silhouette set with outline for black.
-function pieceSvg(ch)
+
+function pieceImg(ch)
 {
-  const p = (ch || "").toLowerCase();
-  const white = isWhitePieceChar(ch);
+  const isWhite = ch === ch.toUpperCase();
+  const p = ch.toLowerCase();
 
-  const fill = white ? "rgba(245,248,255,0.95)" : "rgba(0,0,0,0.0)";
-  const stroke = white ? "rgba(190,210,255,0.18)" : "rgba(255,255,255,0.38)";
-  const strokeW = white ? "1.6" : "2.8";
-
-  const common = `fill="${fill}" stroke="${stroke}" stroke-width="${strokeW}" stroke-linejoin="round" stroke-linecap="round"`;
-
-  const paths =
+  const map =
   {
-    p: `<circle ${common} cx="32" cy="18" r="7"/>
-        <path ${common} d="M26 28c0 6 3 10 6 14h-6v6h24v-6h-6c3-4 6-8 6-14 0-3-1-6-2-8H28c-1 2-2 5-2 8z"/>
-        <path ${common} d="M18 52h28l4 8H14l4-8z"/>`,
-
-    r: `<path ${common} d="M18 14h28v10h-4v-5h-4v5h-4v-5h-4v5h-4v-5h-4v5h-4V14z"/>
-        <path ${common} d="M22 24h20v20H22z"/>
-        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
-
-    n: `<path ${common} d="M44 18c-8-8-24-6-28 6l-2 8 10 6-6 10h20c6 0 10-4 10-10 0-6-4-10-10-10h-4l2-4c2-4 2-4 8-6z"/>
-        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
-
-    b: `<path ${common} d="M32 12c6 0 10 5 10 10 0 5-3 8-6 10 4 3 6 7 6 12 0 6-4 10-10 10s-10-4-10-10c0-5 2-9 6-12-3-2-6-5-6-10 0-5 4-10 10-10z"/>
-        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
-
-    q: `<path ${common} d="M18 24c0 9 6 14 14 16l-6 8h12l-6-8c8-2 14-7 14-16H18z"/>
-        <circle ${common} cx="24" cy="18" r="3"/>
-        <circle ${common} cx="32" cy="14" r="3"/>
-        <circle ${common} cx="40" cy="18" r="3"/>
-        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
-
-    k: `<path ${common} d="M30 10h4v6h6v4h-6v6h-4v-6h-6v-4h6v-6z"/>
-        <path ${common} d="M22 28c0 10 6 16 10 18l-6 8h12l-6-8c4-2 10-8 10-18H22z"/>
-        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`
+    p: "P",
+    n: "N",
+    b: "B",
+    r: "R",
+    q: "Q",
+    k: "K"
   };
 
-  const cls = white ? "pcw" : "pcb";
-  return `<svg class="pcsvg ${cls}" viewBox="0 0 64 64" aria-hidden="true">${paths[p] || ""}</svg>`;
+  const color = isWhite ? "w" : "b";
+  const name = map[p];
+
+  return `<img class="pieceimg" src="Merida/${color}${name}.svg" draggable="false">`;
 }
+
 
 // ===== DOTS (inline styles so CSS can stay simple) =====
 function dotStyle(kind)
@@ -447,7 +428,7 @@ function render()
     if (pc)
     {
       div.classList.add("haspc", isWhitePieceChar(pc) ? "pcw" : "pcb");
-      div.innerHTML = pieceSvg(pc);
+      div.innerHTML = pieceImg(pc);
 
       // ensure centering
       const svg = div.querySelector("svg");
