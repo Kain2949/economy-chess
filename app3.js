@@ -1,23 +1,4 @@
-// Economy Chess WebApp — click controls (move + buy), WS updates, smooth timers.
-//
-// Set these 2:
-//   API_BASE = ngrok HTTPS URL (no trailing slash)
-//   API_KEY  = WEB_SECRET_KEY from chesswa.py
-//
-// The WebApp identifies you by Telegram username (@name). If Telegram username is missing,
-// it will ask once and save to localStorage.
-//
-// Backend endpoints used:
-//   POST /api/game/my            { username }
-//   POST /api/game/legals        { game_id, username, from }
-//   POST /api/game/drop_targets  { game_id, username, piece }
-//   POST /api/game/drop          { game_id, username, piece, square }
-//   POST /api/game/move          { game_id, username, from, to }
-//   WS   /ws/game/{game_id}?key=API_KEY&username=@name
-//
-// Notes:
-// - WS state messages from your backend may have data.you = null. We preserve MY_SIDE locally.
-// - Timers are computed from server snapshot using serverOffset.
+// Economy Chess WebApp — move + buy, WS, smooth timers, glow dots (capture = big red).
 
 const API_BASE = "https://kristan-labored-earsplittingly.ngrok-free.dev";
 const API_KEY = "jdKSnwe134Hdbsju39r4bsk3r4b239gwj4hjbw3r4r5wer";
@@ -27,15 +8,6 @@ if (tg)
 {
   try { tg.expand(); } catch {}
 }
-
-const COSTS =
-{
-  p: 1,
-  n: 3,
-  b: 3,
-  r: 5,
-  q: 9
-};
 
 // ===== DOM =====
 const elBoard = document.getElementById("board");
@@ -72,23 +44,32 @@ function wsUrlFromHttpBase(httpBase)
 let USERNAME = "";
 let GAME_ID = "";
 let MY_SIDE = ""; // "w" or "b"
+let GAME = null;
 
-let GAME = null; // last server snapshot game payload
-
-// client-side selections (not shared with opponent)
-let selectedFrom = ""; // square "e2"
+let selectedFrom = ""; // "e2"
 let selectedBuy = "";  // "p","n","b","r","q"
-let green = new Set(); // legal move target squares
-let yellow = new Set(); // drop target squares
 
-// timers smoothing
-let serverOffset = 0; // server_ts - client_now_ts at snapshot
+// dots sets (real squares)
+let dotMove = new Set();    // normal legal moves
+let dotCap = new Set();     // capture moves (big red)
+let dotBuy = new Set();     // buy targets
 
-// WS + fallback polling
+let serverOffset = 0;
+
 let ws = null;
 let wsBackoffMs = 500;
 let wsPingTimer = null;
 let pollTimer = null;
+
+// ===== CONFIG =====
+const COSTS =
+{
+  p: 1,
+  n: 3,
+  b: 3,
+  r: 5,
+  q: 9
+};
 
 // ===== HELPERS =====
 function getTelegramUsername()
@@ -130,14 +111,16 @@ async function apiPost(path, body)
     body: JSON.stringify(body || {})
   });
 
-  // If ngrok/hosting returns HTML error, this would throw. That's ok.
   return await res.json();
 }
 
-function fenToMap(fen)
+function parseFen(fen)
 {
-  const part = fen.split(" ")[0];
-  const rows = part.split("/");
+  const parts = (fen || "").split(" ");
+  const boardPart = parts[0] || "";
+  const ep = (parts[3] && parts[3] !== "-") ? parts[3] : "";
+
+  const rows = boardPart.split("/");
   const map = {};
   for (let r = 0; r < 8; r++)
   {
@@ -156,26 +139,41 @@ function fenToMap(fen)
       }
     }
   }
-  return map;
+
+  return { map, ep };
 }
 
-function pieceGlyph(ch)
+function isWhitePieceChar(ch)
 {
-  const isWhite = (ch === ch.toUpperCase());
-  const p = ch.toLowerCase();
-  const cls = isWhite ? "w" : "b";
+  return ch && (ch === ch.toUpperCase());
+}
 
-  const paths =
-  {
-    p:`<circle cx="32" cy="18" r="7"/><path d="M26 28c0 6 3 10 6 14h-6v6h12v-6h-6c3-4 6-8 6-14 0-3-1-6-2-8H28c-1 2-2 5-2 8z"/><path d="M20 52h24l4 8H16l4-8z"/>`,
-    r:`<path d="M18 14h28v10h-4v-5h-4v5h-4v-5h-4v5h-4v-5h-4v5h-4V14z"/><path d="M22 24h20v20H22z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    n:`<path d="M44 18c-8-8-24-6-28 6l-2 8 10 6-6 10h20c6 0 10-4 10-10 0-6-4-10-10-10h-4l2-4c2-4 2-4 8-6z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    b:`<path d="M32 12c6 0 10 5 10 10 0 5-3 8-6 10 4 3 6 7 6 12 0 6-4 10-10 10s-10-4-10-10c0-5 2-9 6-12-3-2-6-5-6-10 0-5 4-10 10-10z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    q:`<path d="M18 24c0 9 6 14 14 16l-6 8h12l-6-8c8-2 14-7 14-16H18z"/><circle cx="24" cy="18" r="3"/><circle cx="32" cy="14" r="3"/><circle cx="40" cy="18" r="3"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    k:`<path d="M30 10h4v6h6v4h-6v6h-4v-6h-6v-4h6v-6z"/><path d="M22 28c0 10 6 16 10 18l-6 8h12l-6-8c4-2 10-8 10-18H22z"/><path d="M16 52h32l4 8H12l4-8z"/>`
-  };
+function isMyPieceChar(ch)
+{
+  if (!ch || !MY_SIDE) return false;
+  const w = isWhitePieceChar(ch);
+  return (MY_SIDE === "w" && w) || (MY_SIDE === "b" && !w);
+}
 
-  return `<svg class="piece ${cls}" viewBox="0 0 64 64">${paths[p] || ""}</svg>`;
+function flipSquareIfBlackPerspective(sq)
+{
+  if (MY_SIDE !== "b") return sq;
+
+  const file = sq[0];
+  const rank = parseInt(sq[1], 10);
+
+  const f = 7 - (file.charCodeAt(0) - 97);
+  const r = 9 - rank;
+
+  return String.fromCharCode(97 + f) + r;
+}
+
+function squareColorClass(fileChar, rankNum)
+{
+  // a1 is dark
+  const f = fileChar.charCodeAt(0) - 97;
+  const r = rankNum - 1;
+  return ((f + r) % 2 === 0) ? "dark" : "light";
 }
 
 function myCoins()
@@ -192,13 +190,14 @@ function isMyTurn()
 function clearMoveSelection()
 {
   selectedFrom = "";
-  green.clear();
+  dotMove.clear();
+  dotCap.clear();
 }
 
 function clearBuySelection()
 {
   selectedBuy = "";
-  yellow.clear();
+  dotBuy.clear();
   document.querySelectorAll(".shopbtn").forEach(b => b.classList.remove("active"));
 }
 
@@ -208,28 +207,100 @@ function clearAllSelection()
   clearBuySelection();
 }
 
-function squareAllowedColorClass(fileChar, rankNum)
+// ===== PIECES (SVG silhouettes) =====
+// Not chess.com assets (those are copyrighted). This is a custom silhouette set with outline for black.
+function pieceSvg(ch)
 {
-  // Standard: a1 is dark
-  const f = fileChar.charCodeAt(0) - 97;
-  const r = rankNum - 1;
-  return ((f + r) % 2 === 0) ? "dark" : "light";
+  const p = (ch || "").toLowerCase();
+  const white = isWhitePieceChar(ch);
+
+  const fill = white ? "rgba(245,248,255,0.95)" : "rgba(0,0,0,0.0)";
+  const stroke = white ? "rgba(190,210,255,0.18)" : "rgba(255,255,255,0.38)";
+  const strokeW = white ? "1.6" : "2.8";
+
+  const common = `fill="${fill}" stroke="${stroke}" stroke-width="${strokeW}" stroke-linejoin="round" stroke-linecap="round"`;
+
+  const paths =
+  {
+    p: `<circle ${common} cx="32" cy="18" r="7"/>
+        <path ${common} d="M26 28c0 6 3 10 6 14h-6v6h24v-6h-6c3-4 6-8 6-14 0-3-1-6-2-8H28c-1 2-2 5-2 8z"/>
+        <path ${common} d="M18 52h28l4 8H14l4-8z"/>`,
+
+    r: `<path ${common} d="M18 14h28v10h-4v-5h-4v5h-4v-5h-4v5h-4v-5h-4v5h-4V14z"/>
+        <path ${common} d="M22 24h20v20H22z"/>
+        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
+
+    n: `<path ${common} d="M44 18c-8-8-24-6-28 6l-2 8 10 6-6 10h20c6 0 10-4 10-10 0-6-4-10-10-10h-4l2-4c2-4 2-4 8-6z"/>
+        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
+
+    b: `<path ${common} d="M32 12c6 0 10 5 10 10 0 5-3 8-6 10 4 3 6 7 6 12 0 6-4 10-10 10s-10-4-10-10c0-5 2-9 6-12-3-2-6-5-6-10 0-5 4-10 10-10z"/>
+        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
+
+    q: `<path ${common} d="M18 24c0 9 6 14 14 16l-6 8h12l-6-8c8-2 14-7 14-16H18z"/>
+        <circle ${common} cx="24" cy="18" r="3"/>
+        <circle ${common} cx="32" cy="14" r="3"/>
+        <circle ${common} cx="40" cy="18" r="3"/>
+        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`,
+
+    k: `<path ${common} d="M30 10h4v6h6v4h-6v6h-4v-6h-6v-4h6v-6z"/>
+        <path ${common} d="M22 28c0 10 6 16 10 18l-6 8h12l-6-8c4-2 10-8 10-18H22z"/>
+        <path ${common} d="M16 52h32l4 8H12l4-8z"/>`
+  };
+
+  const cls = white ? "pcw" : "pcb";
+  return `<svg class="pcsvg ${cls}" viewBox="0 0 64 64" aria-hidden="true">${paths[p] || ""}</svg>`;
 }
 
-function flipSquareIfBlackPerspective(sq)
+// ===== DOTS (inline styles so CSS can stay simple) =====
+function dotStyle(kind)
 {
-  if (MY_SIDE !== "b") return sq;
+  // kind: "move" | "cap" | "buy" | "sel"
+  let size = 10;
+  let c = "rgba(0, 255, 210, 0.92)";   // teal
+  let glow = "0 0 10px rgba(0, 255, 210, 0.55), 0 0 22px rgba(0, 255, 210, 0.28)";
 
-  const file = sq[0];
-  const rank = parseInt(sq[1], 10);
+  if (kind === "buy")
+  {
+    c = "rgba(255, 215, 0, 0.92)";
+    glow = "0 0 10px rgba(255, 215, 0, 0.45), 0 0 22px rgba(255, 215, 0, 0.22)";
+    size = 11;
+  }
+  if (kind === "cap")
+  {
+    c = "rgba(255, 80, 120, 0.95)";
+    glow = "0 0 12px rgba(255, 80, 120, 0.55), 0 0 28px rgba(255, 80, 120, 0.28)";
+    size = 20; // ~2x
+  }
+  if (kind === "sel")
+  {
+    c = "rgba(193, 76, 255, 0.95)";
+    glow = "0 0 12px rgba(193, 76, 255, 0.55), 0 0 28px rgba(193, 76, 255, 0.28)";
+    size = 14;
+  }
 
-  const f = 7 - (file.charCodeAt(0) - 97);
-  const r = 9 - rank;
-
-  return String.fromCharCode(97 + f) + r;
+  return { size, c, glow };
 }
 
-// ===== UI UPDATES =====
+function makeDot(kind)
+{
+  const d = document.createElement("span");
+  const s = dotStyle(kind);
+
+  d.style.position = "absolute";
+  d.style.left = "50%";
+  d.style.top = "50%";
+  d.style.transform = "translate(-50%, -50%)";
+  d.style.width = s.size + "px";
+  d.style.height = s.size + "px";
+  d.style.borderRadius = "999px";
+  d.style.background = s.c;
+  d.style.boxShadow = s.glow;
+  d.style.pointerEvents = "none";
+  d.style.zIndex = "1";
+  return d;
+}
+
+// ===== UI =====
 function updateShopButtons()
 {
   if (!GAME) return;
@@ -254,8 +325,11 @@ function updateShopButtons()
 
 async function refreshMoveTargets()
 {
-  green.clear();
+  dotMove.clear();
+  dotCap.clear();
+
   if (!selectedFrom || !isMyTurn()) return;
+  if (!GAME_ID) return;
 
   const r = await apiPost("/api/game/legals",
   {
@@ -265,13 +339,40 @@ async function refreshMoveTargets()
   });
 
   const dests = (r && r.ok) ? (r.dests || []) : [];
-  green = new Set(dests);
+  const { map, ep } = parseFen(GAME.fen);
+
+  const fromPc = map[selectedFrom] || "";
+  const fromIsPawn = fromPc && fromPc.toLowerCase() === "p";
+
+  for (const to of dests)
+  {
+    const toPc = map[to];
+
+    // normal capture
+    if (toPc && !isMyPieceChar(toPc))
+    {
+      dotCap.add(to);
+      continue;
+    }
+
+    // en-passant capture heuristic
+    if (fromIsPawn && ep && to === ep)
+    {
+      const df = Math.abs(to.charCodeAt(0) - selectedFrom.charCodeAt(0));
+      if (df === 1) dotCap.add(to);
+      else dotMove.add(to);
+      continue;
+    }
+
+    dotMove.add(to);
+  }
 }
 
 async function refreshBuyTargets()
 {
-  yellow.clear();
+  dotBuy.clear();
   if (!selectedBuy || !isMyTurn()) return;
+  if (!GAME_ID) return;
 
   const r = await apiPost("/api/game/drop_targets",
   {
@@ -281,7 +382,7 @@ async function refreshBuyTargets()
   });
 
   const targets = (r && r.ok) ? (r.targets || []) : [];
-  yellow = new Set(targets);
+  dotBuy = new Set(targets);
 }
 
 function render()
@@ -308,48 +409,71 @@ function render()
   if (elMyCoins) elMyCoins.textContent = String(myCoins());
 
   updateShopButtons();
-
-  // render timers once here; tick() will update continuously
   tickTimers();
 
-  // render board
-  const map = fenToMap(GAME.fen);
+  const { map } = parseFen(GAME.fen);
 
-  // Visual board squares: we always generate "display squares" from a8..h1
-  // and map to real squares when MY_SIDE === "b"
   const squares = [];
   for (let vr = 8; vr >= 1; vr--)
   {
     for (let vf = 0; vf < 8; vf++)
     {
       const file = String.fromCharCode(97 + vf);
-      const disp = file + vr; // display label
+      const disp = file + vr;
       const real = (MY_SIDE === "b") ? flipSquareIfBlackPerspective(disp) : disp;
       squares.push({ disp, real });
     }
   }
 
   elBoard.innerHTML = "";
+
   for (const { disp, real } of squares)
   {
     const file = disp[0];
     const rank = parseInt(disp[1], 10);
 
     const div = document.createElement("div");
-    div.className = "sq " + squareAllowedColorClass(file, rank);
+    div.className = "sq " + squareColorClass(file, rank);
     div.dataset.sq = real;
 
-    const pc = map[real];
-if (pc)
-{
-  const isWhite = (pc === pc.toUpperCase());
-  div.classList.add("haspc", isWhite ? "pcw" : "pcb");
-  div.innerHTML = `<span class="piece">${pieceGlyph(pc)}</span>`;
-}
+    // to support absolute dots
+    div.style.position = "relative";
+    div.style.display = "flex";
+    div.style.alignItems = "center";
+    div.style.justifyContent = "center";
 
-    if (selectedFrom === real) div.classList.add("sel");
-    if (green.has(real)) div.classList.add("g");
-    if (yellow.has(real)) div.classList.add("y");
+    // piece
+    const pc = map[real];
+    if (pc)
+    {
+      div.classList.add("haspc", isWhitePieceChar(pc) ? "pcw" : "pcb");
+      div.innerHTML = pieceSvg(pc);
+
+      // ensure centering
+      const svg = div.querySelector("svg");
+      if (svg)
+      {
+        svg.style.width = "78%";
+        svg.style.height = "78%";
+        svg.style.display = "block";
+        svg.style.zIndex = "2";
+        svg.style.pointerEvents = "none";
+        // soft shadow so white stands out; black already outlined
+        svg.style.filter = isWhitePieceChar(pc)
+          ? "drop-shadow(0 10px 26px rgba(0,0,0,0.45))"
+          : "drop-shadow(0 10px 26px rgba(0,0,0,0.35))";
+      }
+    }
+
+    // dots
+    if (selectedFrom === real)
+    {
+      div.classList.add("sel");
+      div.appendChild(makeDot("sel"));
+    }
+    if (dotMove.has(real)) div.appendChild(makeDot("move"));
+    if (dotCap.has(real)) div.appendChild(makeDot("cap"));
+    if (dotBuy.has(real)) div.appendChild(makeDot("buy"));
 
     div.addEventListener("click", () => onSquareClick(real));
     elBoard.appendChild(div);
@@ -360,22 +484,24 @@ function applySnapshot(newGame)
 {
   if (!newGame) return;
 
-  // preserve side even if WS snapshot has no "you"
   if (!newGame.you && MY_SIDE) newGame.you = MY_SIDE;
+
+  // ignore stale snapshots (prevents WS/poll overwriting newer coins/fen)
+  if (GAME && typeof GAME.server_ts === "number" && typeof newGame.server_ts === "number")
+  {
+    if (newGame.server_ts < GAME.server_ts) return;
+  }
 
   GAME = newGame;
 
-  // If we didn't know side yet (first load), take it
   if (!MY_SIDE && GAME.you) MY_SIDE = GAME.you;
 
-  // update time offset
   const nowClient = Math.floor(Date.now() / 1000);
   if (typeof GAME.server_ts === "number")
   {
     serverOffset = GAME.server_ts - nowClient;
   }
 
-  // clear local selections after any server update (prevents desync)
   clearAllSelection();
   render();
 }
@@ -389,7 +515,7 @@ async function onSquareClick(sq)
   if (selectedBuy)
   {
     if (!isMyTurn()) return;
-    if (!yellow.has(sq)) return;
+    if (!dotBuy.has(sq)) return;
 
     const r = await apiPost("/api/game/drop",
     {
@@ -407,7 +533,6 @@ async function onSquareClick(sq)
 
     applySnapshot(r.game);
 
-    // If buy got locked by "resolve check" rule, exit buy mode
     if (GAME.in_check_start === 1 && GAME.buy_locked === 1)
     {
       clearBuySelection();
@@ -416,7 +541,6 @@ async function onSquareClick(sq)
       return;
     }
 
-    // still in buy mode: refresh targets (coins changed / square occupied now)
     await refreshBuyTargets();
     render();
     return;
@@ -425,25 +549,20 @@ async function onSquareClick(sq)
   // MOVE mode
   if (!isMyTurn()) return;
 
-  const map = fenToMap(GAME.fen);
+  const { map } = parseFen(GAME.fen);
   const pc = map[sq];
 
-  // Click your own piece -> select it (like normal chess)
-  if (pc)
+  // select your own piece
+  if (pc && isMyPieceChar(pc))
   {
-    const isWhite = (pc === pc.toUpperCase());
-    const isMine = (MY_SIDE === "w" && isWhite) || (MY_SIDE === "b" && !isWhite);
-    if (isMine)
-    {
-      selectedFrom = sq;
-      await refreshMoveTargets();
-      render();
-      return;
-    }
+    selectedFrom = sq;
+    await refreshMoveTargets();
+    render();
+    return;
   }
 
-  // Click a legal target -> make move
-  if (selectedFrom && green.has(sq))
+  // move to legal target
+  if (selectedFrom && (dotMove.has(sq) || dotCap.has(sq)))
   {
     const r = await apiPost("/api/game/move",
     {
@@ -463,7 +582,7 @@ async function onSquareClick(sq)
     return;
   }
 
-  // Click anywhere else clears selection
+  // otherwise clear selection
   if (selectedFrom)
   {
     clearMoveSelection();
@@ -481,7 +600,6 @@ function setupShopButtons()
       if (!GAME || GAME.status !== "active") return;
       if (!isMyTurn()) return;
 
-      // blocked by special rule
       if (GAME.in_check_start === 1 && GAME.buy_locked === 1) return;
 
       const p = (btn.dataset.piece || "").toLowerCase();
@@ -490,7 +608,6 @@ function setupShopButtons()
       const coins = myCoins();
       if (coins < COSTS[p]) return;
 
-      // toggle
       if (selectedBuy === p)
       {
         clearBuySelection();
@@ -498,7 +615,6 @@ function setupShopButtons()
         return;
       }
 
-      // entering buy mode cancels move selection
       clearMoveSelection();
       selectedBuy = p;
 
@@ -522,13 +638,11 @@ function tickTimers()
     return;
   }
 
-  // approximate server "now" using offset
   const nowClient = Math.floor(Date.now() / 1000);
   const nowServer = nowClient + serverOffset;
 
   const globalRem = Math.max(0, GAME.global_end_ts - nowServer);
 
-  // elapsed since snapshot in server-time coordinates
   const snapTs = (typeof GAME.server_ts === "number") ? GAME.server_ts : nowServer;
   const elapsed = Math.max(0, nowServer - snapTs);
 
@@ -546,7 +660,7 @@ function tickTimers()
   if (elTB) elTB.textContent = fmt(b);
 }
 
-// ===== WS =====
+// ===== WS / POLL =====
 function stopPolling()
 {
   if (pollTimer)
@@ -605,7 +719,6 @@ function connectWS()
   }
   catch
   {
-    // fallback immediately
     startPolling();
     return;
   }
@@ -614,7 +727,6 @@ function connectWS()
   {
     wsBackoffMs = 500;
 
-    // keepalive
     wsPingTimer = setInterval(() =>
     {
       try
@@ -627,7 +739,6 @@ function connectWS()
 
   ws.onmessage = (ev) =>
   {
-    // server sends JSON for state/finished; may send "pong"
     if (typeof ev.data === "string" && ev.data === "pong") return;
 
     try
@@ -642,7 +753,6 @@ function connectWS()
 
       if (msg.type === "finished")
       {
-        // keep last board state, but show result
         if (GAME)
         {
           GAME.status = "finished";
@@ -650,7 +760,6 @@ function connectWS()
         }
         render();
 
-        // show a short readable reason
         const r = msg.data || {};
         const reason = r.reason || "finished";
         const winner = r.winner || "";
@@ -671,7 +780,6 @@ function connectWS()
   {
     closeWS();
 
-    // WS can be flaky on free ngrok; fallback to polling after a few retries
     wsBackoffMs = Math.min(8000, Math.floor(wsBackoffMs * 1.6));
     if (wsBackoffMs >= 4000)
     {
@@ -685,7 +793,7 @@ function connectWS()
 
   ws.onerror = () =>
   {
-    // let onclose handle retry
+    // onclose will handle
   };
 }
 
@@ -702,7 +810,6 @@ async function init()
   if (elMe) elMe.textContent = USERNAME;
 
   setupShopButtons();
-
   setStatus("Загрузка партии…");
 
   let r = null;
@@ -741,8 +848,6 @@ async function init()
 
   if (!MY_SIDE)
   {
-    // if backend couldn't determine side (rare), we still can show board,
-    // but buying/moving will be blocked. Usually means user not in DB (no /start).
     setStatus("Не могу определить твою сторону. Убедись, что ты нажимал /start у бота.");
     render();
     startPolling();
@@ -753,7 +858,6 @@ async function init()
   render();
 }
 
-// smooth UI timer tick
 setInterval(() =>
 {
   tickTimers();
