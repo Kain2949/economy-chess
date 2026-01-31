@@ -1,762 +1,265 @@
-// Economy Chess WebApp — click controls (move + buy), WS updates, smooth timers.
-//
-// Set these 2:
-//   API_BASE = ngrok HTTPS URL (no trailing slash)
-//   API_KEY  = WEB_SECRET_KEY from chesswa.py
-//
-// The WebApp identifies you by Telegram username (@name). If Telegram username is missing,
-// it will ask once and save to localStorage.
-//
-// Backend endpoints used:
-//   POST /api/game/my            { username }
-//   POST /api/game/legals        { game_id, username, from }
-//   POST /api/game/drop_targets  { game_id, username, piece }
-//   POST /api/game/drop          { game_id, username, piece, square }
-//   POST /api/game/move          { game_id, username, from, to }
-//   WS   /ws/game/{game_id}?key=API_KEY&username=@name
-//
-// Notes:
-// - WS state messages from your backend may have data.you = null. We preserve MY_SIDE locally.
-// - Timers are computed from server snapshot using serverOffset.
+:root{
+  --bg0:#050712;
+  --bg1:#050a1c;
+  --bg2:#040818;
 
-const API_BASE = "https://kristan-labored-earsplittingly.ngrok-free.dev";
-const API_KEY = "jdKSnwe134Hdbsju39r4bsk3r4b239gwj4hjbw3r4r5wer";
+  --glass: rgba(12, 20, 48, 0.48);
+  --glass2: rgba(10, 16, 40, 0.62);
 
-const tg = window.Telegram?.WebApp;
-if (tg)
-{
-  try { tg.expand(); } catch {}
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.66);
+
+  --accent:#8a6bff;
+  --accent2:#5a4cff;
+
+  --shadow: 0 22px 70px rgba(0,0,0,.58);
+  --radius: 22px;
+
+  --light: rgba(255,255,255,0.055);
+  --dark:  rgba(255,255,255,0.028);
+  --grid:  rgba(255,255,255,0.055);
+
+  --dotG: rgba(70,255,220,0.95);
+  --dotY: rgba(255,220,90,0.95);
 }
 
-const COSTS =
-{
-  p: 1,
-  n: 3,
-  b: 3,
-  r: 5,
-  q: 9
-};
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
 
-// ===== DOM =====
-const elBoard = document.getElementById("board");
-const elStatus = document.getElementById("status");
-const elMe = document.getElementById("me");
-const elCW = document.getElementById("cW");
-const elCB = document.getElementById("cB");
-const elMyCoins = document.getElementById("myCoins");
-const elTG = document.getElementById("tGlobal");
-const elTW = document.getElementById("tW");
-const elTB = document.getElementById("tB");
-
-function setStatus(s)
-{
-  if (elStatus) elStatus.textContent = s;
+body{
+  margin:0;
+  color:var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Helvetica Neue";
+  overflow-x:hidden;
+  background:
+    radial-gradient(1200px 700px at 18% 12%, rgba(110, 80, 255, 0.12), transparent 60%),
+    radial-gradient(1000px 700px at 82% 18%, rgba(60, 150, 255, 0.10), transparent 58%),
+    radial-gradient(900px 700px at 55% 80%, rgba(90, 255, 220, 0.06), transparent 60%),
+    linear-gradient(180deg, var(--bg0) 0%, var(--bg1) 35%, var(--bg2) 70%, var(--bg0) 100%);
 }
 
-function fmt(sec)
-{
-  sec = Math.max(0, Math.floor(sec));
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+body::before{
+  content:"";
+  position:fixed;
+  inset:-20px;
+  pointer-events:none;
+  opacity:0.28;
+  background-image:
+    radial-gradient(circle, rgba(255,255,255,.85) 1px, transparent 2px),
+    radial-gradient(circle, rgba(255,255,255,.45) 1px, transparent 2px);
+  background-size: 160px 160px, 260px 260px;
+  background-position: 0 0, 70px 110px;
+  filter: drop-shadow(0 0 10px rgba(120,110,255,0.12));
 }
 
-function wsUrlFromHttpBase(httpBase)
-{
-  const u = new URL(httpBase);
-  u.protocol = (u.protocol === "https:") ? "wss:" : "ws:";
-  return u.toString().replace(/\/$/, "");
+body::after{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  background: radial-gradient(1200px 700px at 50% 0%, rgba(0,0,0,0.00), rgba(0,0,0,0.55));
+  opacity:0.55;
 }
 
-// ===== STATE =====
-let USERNAME = "";
-let GAME_ID = "";
-let MY_SIDE = ""; // "w" or "b"
-
-let GAME = null; // last server snapshot game payload
-
-// client-side selections (not shared with opponent)
-let selectedFrom = ""; // square "e2"
-let selectedBuy = "";  // "p","n","b","r","q"
-let green = new Set(); // legal move target squares
-let yellow = new Set(); // drop target squares
-
-// timers smoothing
-let serverOffset = 0; // server_ts - client_now_ts at snapshot
-
-// WS + fallback polling
-let ws = null;
-let wsBackoffMs = 500;
-let wsPingTimer = null;
-let pollTimer = null;
-
-// ===== HELPERS =====
-function getTelegramUsername()
-{
-  try
-  {
-    const u = tg?.initDataUnsafe?.user;
-    if (u?.username) return "@" + u.username;
-  }
-  catch {}
-  return "";
+#app{
+  width:min(520px, 94vw);
+  margin:0 auto;
+  padding: 14px 12px 18px;
 }
 
-function getUsername()
-{
-  let u = getTelegramUsername();
-  if (u) return u;
+/* TOP BAR */
+.topbar{ display:flex; gap:10px; margin-bottom:10px; }
 
-  u = (localStorage.getItem("ec_username") || "").trim();
-  if (u) return u.startsWith("@") ? u : ("@" + u);
+.timer{
+  flex:1;
+  border:none;
+  border-radius: 18px;
+  padding: 10px 10px;
+  text-align:center;
+  background: linear-gradient(180deg, rgba(18,28,62,0.55), rgba(10,16,40,0.48));
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 55px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.045);
+}
+.timer .label{ font-size: 11px; color: rgba(255,255,255,0.62); letter-spacing: .2px; }
+.timer .time{ margin-top:2px; font-size:20px; font-weight:900; letter-spacing:.6px; text-shadow:0 12px 40px rgba(0,0,0,.55); }
 
-  const p = prompt("Введи свой Telegram username (например: @myname)");
-  if (!p) return "";
-  const v = p.trim().startsWith("@") ? p.trim() : ("@" + p.trim());
-  localStorage.setItem("ec_username", v);
-  return v;
+/* INFO */
+.info{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px; color: rgba(255,255,255,0.86); }
+.info .me{ color: rgba(255,255,255,0.70); }
+.info .status{ margin-left:auto; color: rgba(255,255,255,0.70); }
+
+/* BOARD */
+.board{
+  position:relative;
+  display:grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-rows: repeat(8, minmax(0, 1fr));
+  width:100%;
+  aspect-ratio: 1 / 1;
+
+  border:none;
+  border-radius: 22px;
+  overflow:hidden;
+
+  background: linear-gradient(180deg, rgba(12,20,48,0.40), rgba(8,12,30,0.34));
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow), inset 0 0 0 1px rgba(255,255,255,0.045);
 }
 
-async function apiPost(path, body)
-{
-  const res = await fetch(API_BASE + path,
-  {
-    method: "POST",
-    headers:
-    {
-      "Content-Type": "application/json",
-      "X-API-KEY": API_KEY
-    },
-    body: JSON.stringify(body || {})
-  });
-
-  // If ngrok/hosting returns HTML error, this would throw. That's ok.
-  return await res.json();
+.board::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  pointer-events:none;
+  background:
+    radial-gradient(700px 260px at 50% 0%, rgba(255,255,255,0.12), transparent 60%),
+    radial-gradient(600px 260px at 20% 20%, rgba(140,200,255,0.08), transparent 60%),
+    radial-gradient(600px 260px at 80% 25%, rgba(140,110,255,0.08), transparent 60%);
+  opacity:0.55;
 }
 
-function fenToMap(fen)
-{
-  const part = fen.split(" ")[0];
-  const rows = part.split("/");
-  const map = {};
-  for (let r = 0; r < 8; r++)
-  {
-    let file = 0;
-    for (const ch of rows[r])
-    {
-      if (/\d/.test(ch))
-      {
-        file += parseInt(ch, 10);
-      }
-      else
-      {
-        const sq = String.fromCharCode(97 + file) + (8 - r);
-        map[sq] = ch;
-        file++;
-      }
-    }
-  }
-  return map;
+.sq{
+  position:relative;
+  min-width:0;
+  min-height:0;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  font-size:0;
+  user-select:none;
+  cursor:pointer;
+
+  box-shadow: inset 0 0 0 1px var(--grid);
+  transition: transform .12s ease;
 }
 
-function pieceGlyph(ch)
-{
-  const isWhite = (ch === ch.toUpperCase());
-  const p = ch.toLowerCase();
-  const cls = isWhite ? "w" : "b";
+.light{ background: var(--light); }
+.dark { background: var(--dark);  }
 
-  const paths =
-  {
-    p:`<circle cx="32" cy="18" r="7"/><path d="M26 28c0 6 3 10 6 14h-6v6h12v-6h-6c3-4 6-8 6-14 0-3-1-6-2-8H28c-1 2-2 5-2 8z"/><path d="M20 52h24l4 8H16l4-8z"/>`,
-    r:`<path d="M18 14h28v10h-4v-5h-4v5h-4v-5h-4v5h-4v-5h-4v5h-4V14z"/><path d="M22 24h20v20H22z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    n:`<path d="M44 18c-8-8-24-6-28 6l-2 8 10 6-6 10h20c6 0 10-4 10-10 0-6-4-10-10-10h-4l2-4c2-4 2-4 8-6z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    b:`<path d="M32 12c6 0 10 5 10 10 0 5-3 8-6 10 4 3 6 7 6 12 0 6-4 10-10 10s-10-4-10-10c0-5 2-9 6-12-3-2-6-5-6-10 0-5 4-10 10-10z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    q:`<path d="M18 24c0 9 6 14 14 16l-6 8h12l-6-8c8-2 14-7 14-16H18z"/><circle cx="24" cy="18" r="3"/><circle cx="32" cy="14" r="3"/><circle cx="40" cy="18" r="3"/><path d="M16 52h32l4 8H12l4-8z"/>`,
-    k:`<path d="M30 10h4v6h6v4h-6v6h-4v-6h-6v-4h6v-6z"/><path d="M22 28c0 10 6 16 10 18l-6 8h12l-6-8c4-2 10-8 10-18H22z"/><path d="M16 52h32l4 8H12l4-8z"/>`
-  };
+.sq:hover{ transform: scale(1.01); }
 
-  return `<svg class="piece ${cls}" viewBox="0 0 64 64">${paths[p] || ""}</svg>`;
+.sq.sel{
+  outline:none;
+  z-index:2;
+  box-shadow:
+    inset 0 0 0 1px rgba(255,255,255,0.06),
+    inset 0 0 0 2px rgba(138,107,255,0.55),
+    0 0 0 1px rgba(138,107,255,0.25);
 }
 
-function myCoins()
-{
-  if (!GAME) return 0;
-  return (MY_SIDE === "w") ? GAME.coins_w : GAME.coins_b;
+/* DOTS instead of full-cell highlight */
+.sq.g::after,
+.sq.y::after{
+  content:"";
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:10px;
+  height:10px;
+  border-radius:999px;
+  transform: translate(-50%,-50%);
+  pointer-events:none;
 }
 
-function isMyTurn()
-{
-  return GAME && GAME.status === "active" && GAME.turn === MY_SIDE;
+.sq.haspc.g::after,
+.sq.haspc.y::after{ top:72%; }
+
+.sq.g::after{
+  background: var(--dotG);
+  box-shadow: 0 0 14px rgba(70,255,220,0.55), 0 0 30px rgba(70,255,220,0.22);
 }
 
-function clearMoveSelection()
-{
-  selectedFrom = "";
-  green.clear();
+.sq.y::after{
+  background: var(--dotY);
+  box-shadow: 0 0 14px rgba(255,220,90,0.50), 0 0 30px rgba(255,220,90,0.20);
 }
 
-function clearBuySelection()
-{
-  selectedBuy = "";
-  yellow.clear();
-  document.querySelectorAll(".shopbtn").forEach(b => b.classList.remove("active"));
+/* PIECES */
+.pieceimg{
+  width:78%;
+  height:78%;
+  display:block;
+  object-fit:contain;
+  pointer-events:none;
+  filter: drop-shadow(0 12px 28px rgba(0,0,0,0.55));
 }
 
-function clearAllSelection()
-{
-  clearMoveSelection();
-  clearBuySelection();
+/* black outline */
+.pcb .pieceimg{
+  filter:
+    drop-shadow(0 0 1px rgba(255,255,255,0.75))
+    drop-shadow(0 0 6px rgba(255,255,255,0.10))
+    drop-shadow(0 12px 28px rgba(0,0,0,0.55));
 }
 
-function squareAllowedColorClass(fileChar, rankNum)
-{
-  // Standard: a1 is dark
-  const f = fileChar.charCodeAt(0) - 97;
-  const r = rankNum - 1;
-  return ((f + r) % 2 === 0) ? "dark" : "light";
+/* BOTTOM */
+.bottom{ display:flex; gap:10px; margin-top: 12px; align-items:center; }
+
+.coins{
+  min-width: 92px;
+  border:none;
+  border-radius: 18px;
+  padding: 10px 12px;
+  text-align:center;
+  background: linear-gradient(180deg, rgba(18,28,62,0.55), rgba(10,16,40,0.48));
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 55px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.045);
+}
+.coins .label{ font-size:11px; color: rgba(255,255,255,0.62); }
+.coins .value{ font-size: 26px; font-weight: 900; text-shadow: 0 12px 40px rgba(0,0,0,.55); }
+
+.shop{ display:flex; gap:10px; flex:1; }
+
+.shopbtn{
+  flex:1;
+  position:relative;
+  border:none;
+  border-radius: 18px;
+  padding: 12px 0;
+  color: rgba(255,255,255,0.92);
+  background: rgba(10,16,40,0.44);
+  backdrop-filter: blur(12px);
+  font-size: 22px;
+  cursor:pointer;
+  box-shadow: 0 16px 50px rgba(0,0,0,0.42), inset 0 0 0 1px rgba(255,255,255,0.045);
+  transition: transform .12s ease, filter .12s ease, box-shadow .12s ease;
+}
+.shopbtn:hover{ transform: translateY(-1px); filter: brightness(1.05); }
+
+.shopbtn .cost{ position:absolute; top:7px; right:10px; font-size:12px; color: rgba(255,255,255,0.70); }
+
+.shopbtn .qty{
+  position:absolute;
+  left:8px;
+  bottom:8px;
+  width:18px;
+  height:18px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.78);
+  font-size: 11px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
 }
 
-function flipSquareIfBlackPerspective(sq)
-{
-  if (MY_SIDE !== "b") return sq;
+.shopbtn.dim{ opacity: 0.35; cursor: not-allowed; filter: saturate(0.4); }
 
-  const file = sq[0];
-  const rank = parseInt(sq[1], 10);
-
-  const f = 7 - (file.charCodeAt(0) - 97);
-  const r = 9 - rank;
-
-  return String.fromCharCode(97 + f) + r;
+.shopbtn.active{
+  transform: scale(1.06);
+  background: linear-gradient(135deg, rgba(138,107,255,0.42), rgba(90,76,255,0.22));
+  box-shadow:
+    0 22px 70px rgba(138,107,255,0.20),
+    0 10px 30px rgba(0,0,0,0.35),
+    inset 0 0 0 1px rgba(255,255,255,0.055);
 }
 
-// ===== UI UPDATES =====
-function updateShopButtons()
-{
-  if (!GAME) return;
-
-  const coins = myCoins();
-  const buyBlocked = (!isMyTurn()) || (GAME.in_check_start === 1 && GAME.buy_locked === 1);
-
-  for (const p of ["p", "n", "b", "r", "q"])
-  {
-    const qty = Math.floor(coins / COSTS[p]);
-    const qtyEl = document.getElementById("q_" + p);
-    if (qtyEl) qtyEl.textContent = (qty > 0 && !buyBlocked) ? String(qty) : "";
-
-    const btn = document.querySelector(`.shopbtn[data-piece="${p}"]`);
-    if (btn)
-    {
-      const dim = buyBlocked || qty <= 0;
-      btn.classList.toggle("dim", dim);
-    }
-  }
+@media (max-width: 420px){
+  #app{ padding: 12px 10px 16px; }
+  .timer .time{ font-size: 18px; }
+  .shop{ gap:8px; }
+  .shopbtn{ border-radius: 16px; }
+  .coins, .timer{ border-radius: 16px; }
 }
-
-async function refreshMoveTargets()
-{
-  green.clear();
-  if (!selectedFrom || !isMyTurn()) return;
-
-  const r = await apiPost("/api/game/legals",
-  {
-    game_id: GAME_ID,
-    username: USERNAME,
-    from: selectedFrom
-  });
-
-  const dests = (r && r.ok) ? (r.dests || []) : [];
-  green = new Set(dests);
-}
-
-async function refreshBuyTargets()
-{
-  yellow.clear();
-  if (!selectedBuy || !isMyTurn()) return;
-
-  const r = await apiPost("/api/game/drop_targets",
-  {
-    game_id: GAME_ID,
-    username: USERNAME,
-    piece: selectedBuy
-  });
-
-  const targets = (r && r.ok) ? (r.targets || []) : [];
-  yellow = new Set(targets);
-}
-
-function render()
-{
-  if (!GAME)
-  {
-    setStatus("Нет активной партии. Открой матч через бота.");
-    if (elBoard) elBoard.innerHTML = "";
-    return;
-  }
-
-  if (GAME.status === "active")
-  {
-    setStatus(isMyTurn() ? "Твой ход" : "Ход соперника");
-  }
-  else
-  {
-    setStatus("Партия завершена");
-  }
-
-  if (elMe) elMe.textContent = USERNAME || "?";
-  if (elCW) elCW.textContent = String(GAME.coins_w);
-  if (elCB) elCB.textContent = String(GAME.coins_b);
-  if (elMyCoins) elMyCoins.textContent = String(myCoins());
-
-  updateShopButtons();
-
-  // render timers once here; tick() will update continuously
-  tickTimers();
-
-  // render board
-  const map = fenToMap(GAME.fen);
-
-  // Visual board squares: we always generate "display squares" from a8..h1
-  // and map to real squares when MY_SIDE === "b"
-  const squares = [];
-  for (let vr = 8; vr >= 1; vr--)
-  {
-    for (let vf = 0; vf < 8; vf++)
-    {
-      const file = String.fromCharCode(97 + vf);
-      const disp = file + vr; // display label
-      const real = (MY_SIDE === "b") ? flipSquareIfBlackPerspective(disp) : disp;
-      squares.push({ disp, real });
-    }
-  }
-
-  elBoard.innerHTML = "";
-  for (const { disp, real } of squares)
-  {
-    const file = disp[0];
-    const rank = parseInt(disp[1], 10);
-
-    const div = document.createElement("div");
-    div.className = "sq " + squareAllowedColorClass(file, rank);
-    div.dataset.sq = real;
-
-    const pc = map[real];
-if (pc)
-{
-  const isWhite = (pc === pc.toUpperCase());
-  div.classList.add("haspc", isWhite ? "pcw" : "pcb");
-  div.innerHTML = `<span class="piece">${pieceGlyph(pc)}</span>`;
-}
-
-    if (selectedFrom === real) div.classList.add("sel");
-    if (green.has(real)) div.classList.add("g");
-    if (yellow.has(real)) div.classList.add("y");
-
-    div.addEventListener("click", () => onSquareClick(real));
-    elBoard.appendChild(div);
-  }
-}
-
-function applySnapshot(newGame)
-{
-  if (!newGame) return;
-
-  // preserve side even if WS snapshot has no "you"
-  if (!newGame.you && MY_SIDE) newGame.you = MY_SIDE;
-
-  GAME = newGame;
-
-  // If we didn't know side yet (first load), take it
-  if (!MY_SIDE && GAME.you) MY_SIDE = GAME.you;
-
-  // update time offset
-  const nowClient = Math.floor(Date.now() / 1000);
-  if (typeof GAME.server_ts === "number")
-  {
-    serverOffset = GAME.server_ts - nowClient;
-  }
-
-  // clear local selections after any server update (prevents desync)
-  clearAllSelection();
-  render();
-}
-
-// ===== CLICK HANDLERS =====
-async function onSquareClick(sq)
-{
-  if (!GAME || GAME.status !== "active") return;
-
-  // BUY mode
-  if (selectedBuy)
-  {
-    if (!isMyTurn()) return;
-    if (!yellow.has(sq)) return;
-
-    const r = await apiPost("/api/game/drop",
-    {
-      game_id: GAME_ID,
-      username: USERNAME,
-      piece: selectedBuy,
-      square: sq
-    });
-
-    if (!r || !r.ok)
-    {
-      setStatus("Ошибка покупки: " + (r?.reason || "unknown"));
-      return;
-    }
-
-    applySnapshot(r.game);
-
-    // If buy got locked by "resolve check" rule, exit buy mode
-    if (GAME.in_check_start === 1 && GAME.buy_locked === 1)
-    {
-      clearBuySelection();
-      await refreshMoveTargets();
-      render();
-      return;
-    }
-
-    // still in buy mode: refresh targets (coins changed / square occupied now)
-    await refreshBuyTargets();
-    render();
-    return;
-  }
-
-  // MOVE mode
-  if (!isMyTurn()) return;
-
-  const map = fenToMap(GAME.fen);
-  const pc = map[sq];
-
-  // Click your own piece -> select it (like normal chess)
-  if (pc)
-  {
-    const isWhite = (pc === pc.toUpperCase());
-    const isMine = (MY_SIDE === "w" && isWhite) || (MY_SIDE === "b" && !isWhite);
-    if (isMine)
-    {
-      selectedFrom = sq;
-      await refreshMoveTargets();
-      render();
-      return;
-    }
-  }
-
-  // Click a legal target -> make move
-  if (selectedFrom && green.has(sq))
-  {
-    const r = await apiPost("/api/game/move",
-    {
-      game_id: GAME_ID,
-      username: USERNAME,
-      from: selectedFrom,
-      to: sq
-    });
-
-    if (!r || !r.ok)
-    {
-      setStatus("Ошибка хода: " + (r?.reason || "unknown"));
-      return;
-    }
-
-    applySnapshot(r.game);
-    return;
-  }
-
-  // Click anywhere else clears selection
-  if (selectedFrom)
-  {
-    clearMoveSelection();
-    render();
-  }
-}
-
-// ===== SHOP BUTTONS =====
-function setupShopButtons()
-{
-  document.querySelectorAll(".shopbtn").forEach(btn =>
-  {
-    btn.addEventListener("click", async () =>
-    {
-      if (!GAME || GAME.status !== "active") return;
-      if (!isMyTurn()) return;
-
-      // blocked by special rule
-      if (GAME.in_check_start === 1 && GAME.buy_locked === 1) return;
-
-      const p = (btn.dataset.piece || "").toLowerCase();
-      if (!COSTS[p]) return;
-
-      const coins = myCoins();
-      if (coins < COSTS[p]) return;
-
-      // toggle
-      if (selectedBuy === p)
-      {
-        clearBuySelection();
-        render();
-        return;
-      }
-
-      // entering buy mode cancels move selection
-      clearMoveSelection();
-      selectedBuy = p;
-
-      document.querySelectorAll(".shopbtn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-
-      await refreshBuyTargets();
-      render();
-    });
-  });
-}
-
-// ===== TIMERS =====
-function tickTimers()
-{
-  if (!GAME)
-  {
-    if (elTG) elTG.textContent = "--:--";
-    if (elTW) elTW.textContent = "--:--";
-    if (elTB) elTB.textContent = "--:--";
-    return;
-  }
-
-  // approximate server "now" using offset
-  const nowClient = Math.floor(Date.now() / 1000);
-  const nowServer = nowClient + serverOffset;
-
-  const globalRem = Math.max(0, GAME.global_end_ts - nowServer);
-
-  // elapsed since snapshot in server-time coordinates
-  const snapTs = (typeof GAME.server_ts === "number") ? GAME.server_ts : nowServer;
-  const elapsed = Math.max(0, nowServer - snapTs);
-
-  let w = GAME.clock_w_rem;
-  let b = GAME.clock_b_rem;
-
-  if (GAME.status === "active")
-  {
-    if (GAME.turn === "w") w = Math.max(0, w - elapsed);
-    if (GAME.turn === "b") b = Math.max(0, b - elapsed);
-  }
-
-  if (elTG) elTG.textContent = fmt(globalRem);
-  if (elTW) elTW.textContent = fmt(w);
-  if (elTB) elTB.textContent = fmt(b);
-}
-
-// ===== WS =====
-function stopPolling()
-{
-  if (pollTimer)
-  {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-function startPolling()
-{
-  if (pollTimer) return;
-  pollTimer = setInterval(async () =>
-  {
-    if (!GAME_ID) return;
-    try
-    {
-      const r = await apiPost("/api/game/state",
-      {
-        game_id: GAME_ID,
-        username: USERNAME
-      });
-      if (r && r.ok && r.game) applySnapshot(r.game);
-    }
-    catch {}
-  }, 1200);
-}
-
-function closeWS()
-{
-  if (ws)
-  {
-    try { ws.close(); } catch {}
-    ws = null;
-  }
-  if (wsPingTimer)
-  {
-    clearInterval(wsPingTimer);
-    wsPingTimer = null;
-  }
-}
-
-function connectWS()
-{
-  if (!GAME_ID) return;
-
-  closeWS();
-  stopPolling();
-
-  const base = wsUrlFromHttpBase(API_BASE);
-  const url = base + `/ws/game/${encodeURIComponent(GAME_ID)}?key=${encodeURIComponent(API_KEY)}&username=${encodeURIComponent(USERNAME)}`;
-
-  try
-  {
-    ws = new WebSocket(url);
-  }
-  catch
-  {
-    // fallback immediately
-    startPolling();
-    return;
-  }
-
-  ws.onopen = () =>
-  {
-    wsBackoffMs = 500;
-
-    // keepalive
-    wsPingTimer = setInterval(() =>
-    {
-      try
-      {
-        if (ws && ws.readyState === 1) ws.send("ping");
-      }
-      catch {}
-    }, 20000);
-  };
-
-  ws.onmessage = (ev) =>
-  {
-    // server sends JSON for state/finished; may send "pong"
-    if (typeof ev.data === "string" && ev.data === "pong") return;
-
-    try
-    {
-      const msg = JSON.parse(ev.data);
-
-      if (msg.type === "state")
-      {
-        if (msg.data) applySnapshot(msg.data);
-        return;
-      }
-
-      if (msg.type === "finished")
-      {
-        // keep last board state, but show result
-        if (GAME)
-        {
-          GAME.status = "finished";
-          GAME.result = msg.data;
-        }
-        render();
-
-        // show a short readable reason
-        const r = msg.data || {};
-        const reason = r.reason || "finished";
-        const winner = r.winner || "";
-        let text = `Партия завершена: ${reason}`;
-        if (winner) text += `, победитель: ${winner}`;
-        if (typeof r.cap_w === "number" && typeof r.cap_b === "number")
-        {
-          text += ` (капитал W=${r.cap_w}, B=${r.cap_b})`;
-        }
-        alert(text);
-        return;
-      }
-    }
-    catch {}
-  };
-
-  ws.onclose = () =>
-  {
-    closeWS();
-
-    // WS can be flaky on free ngrok; fallback to polling after a few retries
-    wsBackoffMs = Math.min(8000, Math.floor(wsBackoffMs * 1.6));
-    if (wsBackoffMs >= 4000)
-    {
-      startPolling();
-    }
-    else
-    {
-      setTimeout(connectWS, wsBackoffMs);
-    }
-  };
-
-  ws.onerror = () =>
-  {
-    // let onclose handle retry
-  };
-}
-
-// ===== INIT =====
-async function init()
-{
-  USERNAME = getUsername();
-  if (!USERNAME)
-  {
-    setStatus("Нет username. Без него я не найду твою партию.");
-    return;
-  }
-
-  if (elMe) elMe.textContent = USERNAME;
-
-  setupShopButtons();
-
-  setStatus("Загрузка партии…");
-
-  let r = null;
-  try
-  {
-    r = await apiPost("/api/game/my", { username: USERNAME });
-  }
-  catch
-  {
-    setStatus("Нет связи с backend (проверь API_BASE / ngrok).");
-    return;
-  }
-
-  if (!r || !r.ok)
-  {
-    setStatus("Ошибка backend.");
-    return;
-  }
-
-  if (!r.game)
-  {
-    setStatus("Нет активной партии. Создай матч через бота.");
-    render();
-    return;
-  }
-
-  applySnapshot(r.game);
-
-  if (!GAME || !GAME.game_id)
-  {
-    setStatus("Некорректный ответ game.");
-    return;
-  }
-
-  GAME_ID = GAME.game_id;
-
-  if (!MY_SIDE)
-  {
-    // if backend couldn't determine side (rare), we still can show board,
-    // but buying/moving will be blocked. Usually means user not in DB (no /start).
-    setStatus("Не могу определить твою сторону. Убедись, что ты нажимал /start у бота.");
-    render();
-    startPolling();
-    return;
-  }
-
-  connectWS();
-  render();
-}
-
-// smooth UI timer tick
-setInterval(() =>
-{
-  tickTimers();
-}, 250);
-
-init();
