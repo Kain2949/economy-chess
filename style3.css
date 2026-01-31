@@ -3,10 +3,10 @@
   --bg1:#080317;
   --bg2:#0b0520;
 
-  --glass: rgba(10, 6, 24, 0.62);
+  --glass:  rgba(10, 6, 24, 0.62);
   --glass2: rgba(12, 7, 28, 0.72);
 
-  --text: rgba(255,255,255,0.92);
+  --text:  rgba(255,255,255,0.92);
   --muted: rgba(255,255,255,0.68);
 
   --accent:#c14cff;
@@ -19,7 +19,7 @@
   --light: rgba(255,255,255,0.06);
   --dark:  rgba(255,255,255,0.03);
 
-  --green: rgba(0,255,160,0.18);
+  --green:  rgba(0,255,160,0.18);
   --yellow: rgba(255,215,0,0.18);
 }
 
@@ -102,13 +102,14 @@ body::after{
 
 .timer{
   flex:1;
-  border:none;                     /* без ободка */
+  border:none;
   border-radius: 18px;
   padding: 10px 10px;
   text-align:center;
 
   background: linear-gradient(180deg, rgba(14,8,34,0.62), rgba(10,6,24,0.58));
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   box-shadow:
     0 18px 55px rgba(0,0,0,0.45),
     inset 0 0 0 1px rgba(255,255,255,0.05);
@@ -156,20 +157,26 @@ body::after{
   width:100%;
   aspect-ratio: 1 / 1;
 
-  border:none;                    /* без ободка */
+  border:none;
   border-radius: 22px;
   overflow:hidden;
 
   background: rgba(5,2,12,0.35);
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   box-shadow:
     0 22px 70px rgba(0,0,0,0.55),
     inset 0 0 0 1px rgba(255,255,255,0.04);
 }
 
+/* клетки */
+.light{ background: var(--light); }
+.dark { background: var(--dark);  }
+
 .sq{
   min-width:0;
   min-height:0;
+  overflow:hidden;
 
   display:flex;
   align-items:center;
@@ -181,14 +188,10 @@ body::after{
   transition: transform .12s ease, filter .12s ease;
 }
 
-/* клетки */
-.light{ background: var(--light); }
-.dark { background: var(--dark);  }
-
 /* hover — очень мягко */
 .sq:hover{ transform: scale(1.01); }
 
-/* selected — без белой рамки, только glow */
+/* selected — glow без белой рамки */
 .sq.sel{
   outline:none;
   z-index:2;
@@ -197,37 +200,27 @@ body::after{
     inset 0 0 0 2px rgba(193,76,255,0.22);
 }
 
-/* подсветки ходов */
-.sq.g{
-  box-shadow: inset 0 0 0 9999px var(--green);
-}
-.sq.y{
-  box-shadow: inset 0 0 0 9999px var(--yellow);
-}
+/* подсветки */
+.sq.g{ box-shadow: inset 0 0 0 9999px var(--green); }
+.sq.y{ box-shadow: inset 0 0 0 9999px var(--yellow); }
 
-/* ---------- PIECES FIX ---------- */
-/* если фигура — SVG */
-.sq svg{
-  width: 90%;
-  height: 90%;
+/* ---------- PIECES (больше, без растягивания клеток) ---------- */
+.sq svg,
+.sq img{
+  width: 82%;
+  height: 82%;
   max-width:100%;
   max-height:100%;
-  pointer-events:none;
-  filter: drop-shadow(0 10px 28px rgba(0,0,0,0.45));
-}
-
-/* если фигура — img */
-.sq img{
-  width: 90%;
-  height: 90%;
   object-fit: contain;
   pointer-events:none;
-  filter: drop-shadow(0 10px 28px rgba(0,0,0,0.45));
+  flex: 0 0 auto;
+
+  filter: drop-shadow(0 12px 32px rgba(0,0,0,0.50));
 }
 
-/* если вдруг фигура — текст */
+/* если вдруг фигура — текст (♔ ♕ и т.п.) */
 .sq{
-  font-size: clamp(22px, 6vw, 52px);
+  font-size: clamp(22px, 6.0vw, 52px);
   line-height: 1;
 }
 
@@ -242,13 +235,14 @@ body::after{
 /* coins */
 .coins{
   min-width: 92px;
-  border:none;                    /* без ободка */
+  border:none;
   border-radius: 18px;
   padding: 10px 12px;
   text-align:center;
 
   background: linear-gradient(180deg, rgba(14,8,34,0.62), rgba(10,6,24,0.58));
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   box-shadow:
     0 18px 55px rgba(0,0,0,0.45),
     inset 0 0 0 1px rgba(255,255,255,0.05);
@@ -258,6 +252,7 @@ body::after{
   font-size:11px;
   color: rgba(255,255,255,0.62);
 }
+
 .coins .value{
   font-size: 26px;
   font-weight: 900;
@@ -275,13 +270,14 @@ body::after{
   flex:1;
   position:relative;
 
-  border:none;                    /* без ободка */
+  border:none;
   border-radius: 18px;
 
   padding: 12px 0;
   color: rgba(255,255,255,0.92);
   background: rgba(10,6,24,0.45);
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 
   font-size: 22px;
   cursor:pointer;
@@ -331,7 +327,7 @@ body::after{
   filter: saturate(0.4);
 }
 
-/* active — фиолетовый glow, без бордера */
+/* active — фиолетовый glow */
 .shopbtn.active{
   transform: scale(1.06);
   background: linear-gradient(135deg, rgba(193,76,255,0.40), rgba(122,60,255,0.22));
@@ -341,7 +337,7 @@ body::after{
     inset 0 0 0 1px rgba(255,255,255,0.06);
 }
 
-/* маленькая адаптация, чтобы на узких экранах ничего не давило */
+/* чуть ужмём отступы на узких экранах */
 @media (max-width: 420px){
   #app{ padding: 12px 10px 16px; }
   .timer .time{ font-size: 18px; }
