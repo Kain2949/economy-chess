@@ -330,7 +330,12 @@ function render()
     div.dataset.sq = real;
 
     const pc = map[real];
-    if (pc) div.textContent = pieceGlyph(pc);
+if (pc)
+{
+  const isWhite = (pc === pc.toUpperCase());
+  div.classList.add("haspc", isWhite ? "pcw" : "pcb");
+  div.innerHTML = `<span class="piece">${pieceGlyph(pc)}</span>`;
+}
 
     if (selectedFrom === real) div.classList.add("sel");
     if (green.has(real)) div.classList.add("g");
