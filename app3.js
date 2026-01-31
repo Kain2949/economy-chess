@@ -453,7 +453,7 @@ function render()
       div.appendChild(makeDot("sel"));
     }
     if (dotMove.has(real)) div.appendChild(makeDot("move"));
-    if (dotCap.has(real)) div.appendChild(makeDot("cap"));
+    if (dotCap.has(real)) div.classList.add("cap");
     if (dotBuy.has(real)) div.appendChild(makeDot("buy"));
 
     div.addEventListener("click", () => onSquareClick(real));
