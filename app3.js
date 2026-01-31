@@ -163,9 +163,19 @@ function pieceGlyph(ch)
 {
   const isWhite = (ch === ch.toUpperCase());
   const p = ch.toLowerCase();
-  const w = { k: "♔", q: "♕", r: "♖", b: "♗", n: "♘", p: "♙" };
-  const b = { k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟" };
-  return isWhite ? w[p] : b[p];
+  const cls = isWhite ? "w" : "b";
+
+  const paths =
+  {
+    p:`<circle cx="32" cy="18" r="7"/><path d="M26 28c0 6 3 10 6 14h-6v6h12v-6h-6c3-4 6-8 6-14 0-3-1-6-2-8H28c-1 2-2 5-2 8z"/><path d="M20 52h24l4 8H16l4-8z"/>`,
+    r:`<path d="M18 14h28v10h-4v-5h-4v5h-4v-5h-4v5h-4v-5h-4v5h-4V14z"/><path d="M22 24h20v20H22z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
+    n:`<path d="M44 18c-8-8-24-6-28 6l-2 8 10 6-6 10h20c6 0 10-4 10-10 0-6-4-10-10-10h-4l2-4c2-4 2-4 8-6z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
+    b:`<path d="M32 12c6 0 10 5 10 10 0 5-3 8-6 10 4 3 6 7 6 12 0 6-4 10-10 10s-10-4-10-10c0-5 2-9 6-12-3-2-6-5-6-10 0-5 4-10 10-10z"/><path d="M16 52h32l4 8H12l4-8z"/>`,
+    q:`<path d="M18 24c0 9 6 14 14 16l-6 8h12l-6-8c8-2 14-7 14-16H18z"/><circle cx="24" cy="18" r="3"/><circle cx="32" cy="14" r="3"/><circle cx="40" cy="18" r="3"/><path d="M16 52h32l4 8H12l4-8z"/>`,
+    k:`<path d="M30 10h4v6h6v4h-6v6h-4v-6h-6v-4h6v-6z"/><path d="M22 28c0 10 6 16 10 18l-6 8h12l-6-8c4-2 10-8 10-18H22z"/><path d="M16 52h32l4 8H12l4-8z"/>`
+  };
+
+  return `<svg class="piece ${cls}" viewBox="0 0 64 64">${paths[p] || ""}</svg>`;
 }
 
 function myCoins()
